@@ -90,7 +90,13 @@ class VibeContextExtension {
         // This fires on EVERY keystroke, so we track immediately
         const onDidChangeTextDocument = vscode.workspace.onDidChangeTextDocument(
             (event: vscode.TextDocumentChangeEvent) => {
+                // Only process if there are actual content changes
+                if (event.contentChanges.length === 0) {
+                    return;
+                }
+                
                 console.log(`Vibe Context: File changed - ${event.document.fileName}, Active session: ${!!this.activeSession}, Changes: ${event.contentChanges.length}`);
+                
                 if (!this.activeSession && !this.hasPromptedForSession) {
                     this.handleFirstFileEdit(event.document);
                 } else if (this.activeSession) {
@@ -103,9 +109,13 @@ class VibeContextExtension {
         // Also listen for when documents are saved (in case edits weren't tracked)
         const onDidSaveTextDocument = vscode.workspace.onDidSaveTextDocument(
             (document: vscode.TextDocument) => {
-                if (this.activeSession && document.uri.scheme === 'file') {
+                if (this.activeSession && (document.uri.scheme === 'file' || document.uri.scheme === 'untitled')) {
                     console.log(`Vibe Context: File saved - ${document.fileName}, ensuring it's tracked`);
                     this.trackFileEdit(document);
+                    // Force snippet update on save
+                    this.captureCodeSnippet(document, document.uri.scheme === 'untitled' 
+                        ? `untitled:${document.fileName}` 
+                        : document.uri.fsPath);
                 }
             }
         );
@@ -113,7 +123,7 @@ class VibeContextExtension {
         // Track active editor changes (when user switches tabs)
         const onDidChangeActiveTextEditor = vscode.window.onDidChangeActiveTextEditor(
             (editor: vscode.TextEditor | undefined) => {
-                if (this.activeSession && editor && editor.document.uri.scheme === 'file') {
+                if (this.activeSession && editor && (editor.document.uri.scheme === 'file' || editor.document.uri.scheme === 'untitled')) {
                     console.log(`Vibe Context: Active editor changed - ${editor.document.fileName}`);
                     this.trackFileEdit(editor.document);
                 }
@@ -208,15 +218,20 @@ class VibeContextExtension {
             const fileChange = this.activeSession.filesTouched.get(filePath);
             if (!fileChange) return;
 
-            // Skip if we already have a snippet
-            if (fileChange.snippets && fileChange.snippets.length > 0) {
-                return;
-            }
-
             const lineCount = document.lineCount;
             
             // Skip if file is empty
             if (lineCount === 0) {
+                return;
+            }
+
+            // Always update snippet to get latest content, but limit updates to avoid performance issues
+            // Only update if we don't have one or if file has grown significantly
+            const shouldUpdate = !fileChange.snippets || 
+                                 fileChange.snippets.length === 0 || 
+                                 (lineCount > 50 && (!fileChange.snippets[0] || fileChange.snippets[0].lineEnd < 50));
+
+            if (!shouldUpdate) {
                 return;
             }
 
@@ -225,22 +240,27 @@ class VibeContextExtension {
             const startLine = 0;
             const endLine = Math.min(snippetLines - 1, lineCount - 1);
             
-            // Only capture if we have at least a few lines or meaningful content
-            if (endLine >= startLine) {
-                const snippetContent = document.getText(
-                    new vscode.Range(startLine, 0, endLine, document.lineAt(endLine).text.length)
-                );
+            // Ensure we have valid range
+            if (endLine < startLine || endLine >= lineCount) {
+                return;
+            }
 
-                // Only store if there's actual content
-                if (snippetContent.trim().length > 0) {
-                    fileChange.snippets = [{
-                        lineStart: startLine + 1, // 1-indexed for display
-                        lineEnd: endLine + 1,
-                        content: snippetContent.substring(0, 500), // Limit snippet size
-                    }];
-                }
+            const lastLine = document.lineAt(endLine);
+            const snippetContent = document.getText(
+                new vscode.Range(startLine, 0, endLine, lastLine.text.length)
+            );
+
+            // Only store if there's actual content (at least 10 characters)
+            if (snippetContent.trim().length >= 10) {
+                fileChange.snippets = [{
+                    lineStart: startLine + 1, // 1-indexed for display
+                    lineEnd: endLine + 1,
+                    content: snippetContent.substring(0, 500), // Limit snippet size
+                }];
+                console.log(`Vibe Context: Captured snippet for ${filePath} (lines ${startLine + 1}-${endLine + 1})`);
             }
         } catch (error) {
+            console.log(`Vibe Context: Error capturing snippet: ${error}`);
             // Silently fail - snippet capture is optional
         }
     }
@@ -406,9 +426,13 @@ class VibeContextExtension {
                 return undefined;
             }
 
-            // Get relative paths for tracked files
+            // Get relative paths for tracked files (only real files, not untitled)
             const workspaceRoot = workspaceFolder.uri.fsPath;
             const trackedFiles = Array.from(this.activeSession.filesTouched.keys())
+                .filter(filePath => {
+                    // Only include actual file paths, not untitled documents
+                    return !filePath.startsWith('untitled:') && filePath.startsWith(workspaceRoot);
+                })
                 .map(filePath => {
                     // Convert absolute path to relative path from workspace root
                     let relativePath = vscode.workspace.asRelativePath(filePath, false);
@@ -418,36 +442,44 @@ class VibeContextExtension {
                         relativePath = filePath.substring(workspaceRoot.length + 1);
                     }
                     
-                    return { original: filePath, relative: relativePath };
+                    return relativePath.replace(/\\/g, '/'); // Normalize path separators
                 })
-                .filter(({ original, relative }) => {
-                    // Include if it's a relative path (in workspace) or if we can resolve it
-                    return relative !== original || relative.startsWith(workspaceRoot);
-                })
-                .map(({ relative }) => relative.replace(/\\/g, '/')); // Normalize path separators
+                .filter(relativePath => {
+                    // Only include valid relative paths (not absolute)
+                    return relativePath && !relativePath.startsWith(workspaceRoot) && relativePath.length > 0;
+                });
 
             if (trackedFiles.length === 0) {
+                console.log('Vibe Context: No tracked files for git diff (all untitled or outside workspace)');
                 return undefined;
             }
 
+            console.log(`Vibe Context: Getting git diff for ${trackedFiles.length} tracked files: ${trackedFiles.join(', ')}`);
+
             // Get diff only for tracked files that exist in git
             try {
+                // Escape file paths properly for shell
+                const escapedFiles = trackedFiles.map(f => `"${f.replace(/"/g, '\\"')}"`).join(' ');
                 const { stdout } = await execAsync(
-                    `git diff --stat -- ${trackedFiles.map(f => `"${f}"`).join(' ')}`,
+                    `git diff --stat -- ${escapedFiles}`,
                     {
                         cwd: workspaceRoot,
+                        maxBuffer: 1024 * 1024, // 1MB buffer
                     }
                 );
 
                 if (stdout && stdout.trim().length > 0) {
+                    console.log(`Vibe Context: Git diff found for tracked files`);
                     return stdout.trim();
+                } else {
+                    console.log('Vibe Context: No git changes found for tracked files');
                 }
-            } catch (error) {
+            } catch (error: any) {
                 // Specific files might not be tracked by git, that's okay
+                console.log(`Vibe Context: Git diff error (expected if files not in git): ${error.message}`);
             }
 
             // If no diff for tracked files, don't show unrelated changes
-            // Return undefined instead of falling back to full diff
             return undefined;
         } catch (error) {
             // Git command failed - not a git repo or git not available
