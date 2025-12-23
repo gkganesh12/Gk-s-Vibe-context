@@ -3,9 +3,32 @@
   "displayName": "Vibe Context",
   "description": "Captures session-level developer intent during coding",
   "version": "0.0.1",
+  "publisher": "GaneshKhetawat",
+  "author": {
+    "name": "Ganesh Khetawat"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gkganesh12/Gk-s-Vibe-context.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gkganesh12/Gk-s-Vibe-context/issues"
+  },
+  "homepage": "https://github.com/gkganesh12/Gk-s-Vibe-context#readme",
+  "license": "MIT",
+  "keywords": [
+    "context",
+    "session",
+    "intent",
+    "developer",
+    "productivity",
+    "tracking",
+    "ai",
+    "cursor"
+  ],
   "categories": [
     "Other"
   ],
@@ -33,6 +56,81 @@
       {
         "command": "vibeContext.getContextForAI",
         "title": "Context: Get Context for AI",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.queryWhyCode",
+        "title": "Context: Why does this code exist?",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.queryDecisions",
+        "title": "Context: Decisions for this file",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.queryWhatChanged",
+        "title": "Context: What changed recently?",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.showContextPanel",
+        "title": "Context: Show Context Panel",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.loadSession",
+        "title": "Context: Load Session",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.listSessions",
+        "title": "Context: List Sessions",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.clearSessionHistory",
+        "title": "Context: Clear Session History",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.deleteSessionFromHistory",
+        "title": "Context: Delete Session from History",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.toggleDriftNotifications",
+        "title": "Context: Toggle Drift Notifications",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.pinSession",
+        "title": "Context: Pin Current Session",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.unpinSession",
+        "title": "Context: Unpin Current Session",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.labelSession",
+        "title": "Context: Label Current Session",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.labelSessionFromHistory",
+        "title": "Context: Label Session from History",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.exportSession",
+        "title": "Context: Export Current Session (JSON to clipboard)",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.exportSessionToFile",
+        "title": "Context: Export Current Session to File",
         "category": "Vibe Context"
       }
     ],
@@ -62,12 +160,14 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "ts-node tests/driftUtils.test.ts && ts-node tests/history.test.ts"
   },
   "devDependencies": {
     "@types/vscode": "^1.74.0",
     "@types/node": "16.x",
-    "typescript": "^4.9.4"
+    "typescript": "^4.9.4",
+    "ts-node": "^10.9.2"
   }
 }
 
