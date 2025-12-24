@@ -34,6 +34,8 @@
 - **One-click context export** to clipboard
 - **Markdown formatted** for easy AI consumption
 - **Complete session summary** with all details
+- **Context quality indicator** (0-100% score)
+- **Quality warnings** for low-quality context
 
 ### ⌨️ **Easy to Use**
 - **Keyboard shortcuts** for quick access
@@ -113,11 +115,13 @@ You'll be prompted to:
 - Press `Cmd+Shift+P` → Type `Context: Explain From Memory`
 
 A beautifully formatted summary will open showing:
+- 🟢 Context Quality score (0-100%)
 - 📋 Intent (start & end)
 - 💡 Key decisions
 - ⏱️ Timeline
 - 📁 Files touched
 - 🔀 Git diff summary
+- 🔗 Related sessions (if any)
 
 ### 🤖 Getting Context for AI
 
@@ -135,10 +139,11 @@ Context is automatically copied to your clipboard in markdown format - ready to 
 
 | Action | Mac | Windows/Linux |
 |--------|-----|---------------|
-| **Start Session** | `Cmd+Shift+V`** | `Ctrl+Shift+V` |
+| **Start Session** | `Cmd+Shift+V` | `Ctrl+Shift+V` |
 | **End Session** | `Cmd+Shift+E` | `Ctrl+Shift+E` |
 | **View Summary** | `Cmd+Shift+X` | `Ctrl+Shift+X` |
 | **Copy for AI** | `Cmd+Shift+C` | `Ctrl+Shift+C` |
+| **Search Sessions** | `Cmd+Shift+F` | `Ctrl+Shift+F` |
 
 > 💡 **Tip**: You can customize these shortcuts in VS Code Settings → Keyboard Shortcuts
 
@@ -220,7 +225,12 @@ This creates a `.vsix` file you can install or distribute.
 
 - **[Simple Guide](SIMPLE_GUIDE.md)** - Quick start guide
 - **[How to Use](HOW_TO_USE.md)** - Detailed usage instructions
+- **[Execution Flow](EXECUTION-FLOW.md)** - Complete developer workflow guide ⭐ NEW
 - **[Testing Guide](TESTING_GUIDE.md)** - Development and testing
+- **[Implementation Plan](IMPLEMENTATION-PLAN.md)** - Structured development roadmap ⭐ NEW
+- **[Git Commits](GIT-COMMITS.md)** - Commit conventions and PR structure ⭐ NEW
+- **[Completion Analysis](COMPLETION-ANALYSIS.md)** - Feature completion status ⭐ NEW
+- **[Enhancement Roadmap](ENHANCEMENT-ROADMAP.md)** - Future enhancements ⭐ NEW
 - **[Instructions](instructions.md)** - Original specification
 
 ---
