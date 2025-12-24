@@ -3,6 +3,8 @@ import { exec } from 'child_process';
 import { promises as fs } from 'fs';
 import { promisify } from 'util';
 import { parseDiffStat, isSensitivePath, DiffStat } from './utils/driftUtils';
+import { sanitizeIntent, sanitizeLabel, sanitizeDecision, validateSessionData, sanitizeFilePath } from './utils/validation';
+import { compressSession, cleanupOldSessions } from './utils/compression';
 
 const execAsync = promisify(exec);
 const SESSION_HISTORY_KEY = 'vibeContext.sessionHistory';
@@ -71,6 +73,9 @@ class VibeContextExtension {
     private disposables: vscode.Disposable[] = [];
     private context!: vscode.ExtensionContext;
     private statusBarItem!: vscode.StatusBarItem;
+    private autoSaveInterval: NodeJS.Timeout | undefined;
+    private readonly MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+    private readonly MAX_SNIPPET_SIZE = 500; // characters
 
     public activate(context: vscode.ExtensionContext): void {
         this.context = context;
@@ -80,7 +85,11 @@ class VibeContextExtension {
 
         // Restore ended session from previous activation
         this.restoreEndedSession();
+        this.restoreActiveSession();
         this.ensureDriftNotifyDefault();
+        
+        // Start auto-save for active session
+        this.startAutoSave();
         // Register commands
         const startCommand = vscode.commands.registerCommand(
             'vibeContext.startSession',
@@ -158,6 +167,30 @@ class VibeContextExtension {
             'vibeContext.exportSessionToFile',
             () => this.exportCurrentSessionToFile()
         );
+        const exportAllSessionsCommand = vscode.commands.registerCommand(
+            'vibeContext.exportAllSessions',
+            () => this.exportAllSessions()
+        );
+        const importSessionsCommand = vscode.commands.registerCommand(
+            'vibeContext.importSessions',
+            () => this.importSessions()
+        );
+        const searchSessionsCommand = vscode.commands.registerCommand(
+            'vibeContext.searchSessions',
+            () => this.searchSessions()
+        );
+        const checkContextQualityCommand = vscode.commands.registerCommand(
+            'vibeContext.checkContextQuality',
+            () => this.checkContextQuality()
+        );
+        const showSessionAnalyticsCommand = vscode.commands.registerCommand(
+            'vibeContext.showSessionAnalytics',
+            () => this.showSessionAnalytics()
+        );
+        const cleanupOldSessionsCommand = vscode.commands.registerCommand(
+            'vibeContext.cleanupOldSessions',
+            () => this.cleanupOldSessions()
+        );
 
         context.subscriptions.push(
             startCommand,
@@ -178,7 +211,13 @@ class VibeContextExtension {
             labelSessionCommand,
             labelSessionFromHistoryCommand,
             exportSessionCommand,
-            exportSessionToFileCommand
+            exportSessionToFileCommand,
+            exportAllSessionsCommand,
+            importSessionsCommand,
+            searchSessionsCommand,
+            checkContextQualityCommand,
+            showSessionAnalyticsCommand,
+            cleanupOldSessionsCommand
         );
 
         // Create status bar item
@@ -271,12 +310,29 @@ class VibeContextExtension {
     }
 
     private appendToHistory(session: SessionData): void {
-        const history = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
-        const pinned = history.filter(h => h.pinned);
-        const unpinned = history.filter(h => !h.pinned);
-        const ordered = session.pinned ? [session, ...pinned, ...unpinned] : [...pinned, session, ...unpinned];
-        const next = ordered.slice(0, SESSION_HISTORY_LIMIT);
-        this.context.globalState.update(SESSION_HISTORY_KEY, next);
+        try {
+            if (!validateSessionData(session)) {
+                console.error('Vibe Context: Invalid session data, skipping history append');
+                return;
+            }
+            
+            // Compress session data to save memory
+            const compressedSession = compressSession(session);
+            
+            const history = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
+            
+            // Clean up old sessions (older than 30 days) to free memory
+            const cleanedHistory = cleanupOldSessions(history, 30);
+            
+            const pinned = cleanedHistory.filter(h => h.pinned);
+            const unpinned = cleanedHistory.filter(h => !h.pinned);
+            const ordered = compressedSession.pinned ? [compressedSession, ...pinned, ...unpinned] : [...pinned, compressedSession, ...unpinned];
+            const next = ordered.slice(0, SESSION_HISTORY_LIMIT);
+            this.context.globalState.update(SESSION_HISTORY_KEY, next);
+        } catch (error) {
+            console.error('Vibe Context: Error appending to history:', error);
+            vscode.window.showErrorMessage('Failed to save session to history.');
+        }
     }
 
     private ensureDriftNotifyDefault(): void {
@@ -347,7 +403,7 @@ class VibeContextExtension {
         // Use a consistent identifier for the file
         const filePath = document.uri.scheme === 'untitled' 
             ? `untitled:${document.fileName}` 
-            : document.uri.fsPath;
+            : sanitizeFilePath(document.uri.fsPath);
         
         const now = new Date().toISOString();
 
@@ -376,6 +432,13 @@ class VibeContextExtension {
         if (!this.activeSession) return;
 
         try {
+            // Skip very large files to prevent memory issues
+            const fileSize = document.getText().length;
+            if (fileSize > this.MAX_FILE_SIZE) {
+                console.log(`Vibe Context: Skipping large file ${filePath} (${Math.round(fileSize / 1024)}KB)`);
+                return;
+            }
+            
             const fileChange = this.activeSession.filesTouched.get(filePath);
             if (!fileChange) return;
 
@@ -417,12 +480,17 @@ class VibeContextExtension {
 
             // Only store if there's actual content (at least 10 characters)
             if (snippetContent.trim().length >= 10) {
+                const truncatedContent = snippetContent.substring(0, this.MAX_SNIPPET_SIZE);
                 fileChange.snippets = [{
                     lineStart: startLine + 1, // 1-indexed for display
                     lineEnd: endLine + 1,
-                    content: snippetContent.substring(0, 500), // Limit snippet size
+                    content: truncatedContent,
                 }];
-                console.log(`Vibe Context: Captured snippet for ${filePath} (lines ${startLine + 1}-${endLine + 1})`);
+                if (snippetContent.length > this.MAX_SNIPPET_SIZE) {
+                    console.log(`Vibe Context: Captured snippet for ${filePath} (truncated from ${snippetContent.length} to ${this.MAX_SNIPPET_SIZE} chars)`);
+                } else {
+                    console.log(`Vibe Context: Captured snippet for ${filePath} (lines ${startLine + 1}-${endLine + 1})`);
+                }
             }
         } catch (error) {
             console.log(`Vibe Context: Error capturing snippet: ${error}`);
@@ -448,7 +516,7 @@ class VibeContextExtension {
         this.activeSession = {
             startTime: new Date(),
             filesTouched: new Map<string, FileChange>(),
-            startIntent: startIntent && startIntent.trim().length > 0 ? startIntent.trim() : undefined,
+            startIntent: sanitizeIntent(startIntent),
             keyDecisions: [],
         };
 
@@ -512,8 +580,8 @@ class VibeContextExtension {
             ignoreFocusOut: true,
         });
 
-        if (endIntent && endIntent.trim().length > 0) {
-            this.activeSession.endIntent = endIntent.trim();
+        if (endIntent) {
+            this.activeSession.endIntent = sanitizeIntent(endIntent);
         }
 
         // Optionally capture key decisions
@@ -559,6 +627,9 @@ class VibeContextExtension {
         // Clear active session
         this.activeSession = null;
         this.hasPromptedForSession = false;
+        
+        // Clear backup
+        this.context.globalState.update('vibeContext.activeSessionBackup', undefined);
 
         // Update status bar
         this.updateStatusBar();
@@ -578,8 +649,11 @@ class VibeContextExtension {
                 ignoreFocusOut: true,
             });
 
-            if (decision && decision.trim().length > 0) {
-                this.activeSession.keyDecisions.push(decision.trim());
+            if (decision) {
+                const sanitized = sanitizeDecision(decision);
+                if (sanitized) {
+                    this.activeSession.keyDecisions.push(sanitized);
+                }
                 
                 const addMore = await vscode.window.showQuickPick(
                     ['Add Another', 'Done'],
@@ -714,6 +788,58 @@ class VibeContextExtension {
         }
     }
 
+    private calculateContextQuality(session: SessionData | SessionDataInternal): number {
+        let score = 0;
+
+        // Intent (50% total)
+        if (session.startIntent) score += 30;
+        const endIntent = (session as SessionData).endIntent || (session as SessionDataInternal).endIntent;
+        if (endIntent) score += 20;
+
+        // Decisions (20%)
+        const decisions = (session as SessionData).keyDecisions || (session as SessionDataInternal).keyDecisions || [];
+        if (decisions.length > 0) score += 20;
+
+        // Files tracked (15%)
+        const files = session.filesTouched instanceof Map
+            ? Array.from(session.filesTouched.values())
+            : session.filesTouched || [];
+        if (files.length > 0) score += 15;
+
+        // Git diff (15%)
+        if (session.diffSummary && session.diffSummary.includes('Git diff')) {
+            score += 15;
+        }
+
+        return Math.min(100, score);
+    }
+
+    private getQualityEmoji(score: number): string {
+        if (score >= 80) return '🟢';
+        if (score >= 60) return '🟡';
+        if (score >= 40) return '🟠';
+        return '🔴';
+    }
+
+    private getQualityTips(session: SessionData | SessionDataInternal, quality: number): string {
+        const tips: string[] = [];
+        
+        if (!session.startIntent) tips.push('• Add start intent for better context');
+        const endIntent = (session as SessionData).endIntent || (session as SessionDataInternal).endIntent;
+        if (!endIntent) tips.push('• Add end intent to refine context');
+        const decisions = (session as SessionData).keyDecisions || (session as SessionDataInternal).keyDecisions || [];
+        if (decisions.length === 0) tips.push('• Capture key decisions made during session');
+        const files = session.filesTouched instanceof Map
+            ? Array.from(session.filesTouched.values())
+            : session.filesTouched || [];
+        if (files.length === 0) tips.push('• Ensure files are tracked during session');
+        if (!session.diffSummary || !session.diffSummary.includes('Git diff')) {
+            tips.push('• Work within git-tracked workspace for better context');
+        }
+
+        return tips.length > 0 ? tips.join('\n') : 'Context quality is excellent!';
+    }
+
     private formatSessionSummary(session: SessionData | SessionDataInternal): string {
         const startTime = session.startTime instanceof Date 
             ? session.startTime 
@@ -733,9 +859,17 @@ class VibeContextExtension {
             ? session.filesTouched
             : [];
 
+        const quality = this.calculateContextQuality(session);
+        const emoji = this.getQualityEmoji(quality);
+
         let summary = `╔═══════════════════════════════════════════════════════╗\n`;
         summary += `║           VIBE CONTEXT - SESSION SUMMARY           ║\n`;
         summary += `╚═══════════════════════════════════════════════════════╝\n\n`;
+        summary += `${emoji} Context Quality: ${quality}%\n`;
+        if (quality < 60) {
+            summary += `⚠️  Low quality context. Consider adding intent, decisions, or ensuring git diff is available.\n`;
+        }
+        summary += `\n`;
 
         // Intent Section
         if (session.startIntent || (session as SessionData).endIntent || (session as SessionDataInternal).endIntent) {
@@ -874,13 +1008,110 @@ class VibeContextExtension {
         outputChannel.show();
     }
 
+    private findRelatedSessions(
+        targetSession: SessionData,
+        allSessions: SessionData[]
+    ): SessionData[] {
+        const related: Array<{ session: SessionData; score: number }> = [];
+
+        // Get target file paths
+        const targetFiles = new Set(
+            targetSession.filesTouched.map(f =>
+                typeof f === 'string' ? f : f.filePath
+            )
+        );
+
+        // Get target intent keywords
+        const targetIntent = (targetSession.startIntent || targetSession.endIntent || '').toLowerCase();
+        const targetKeywords = targetIntent.split(/\s+/).filter(w => w.length > 3);
+
+        const targetDate = new Date(targetSession.startTime);
+
+        for (const session of allSessions) {
+            if (session.startTime === targetSession.startTime) continue; // Skip self
+
+            let score = 0;
+
+            // File overlap (40 points max)
+            const sessionFiles = new Set(
+                session.filesTouched.map(f =>
+                    typeof f === 'string' ? f : f.filePath
+                )
+            );
+            const fileOverlap = [...targetFiles].filter(f => sessionFiles.has(f)).length;
+            score += Math.min(40, fileOverlap * 10);
+
+            // Intent similarity (30 points max)
+            const sessionIntent = (session.startIntent || session.endIntent || '').toLowerCase();
+            const keywordMatches = targetKeywords.filter(kw => sessionIntent.includes(kw)).length;
+            score += Math.min(30, keywordMatches * 10);
+
+            // Time proximity (30 points max)
+            const sessionDate = new Date(session.startTime);
+            const daysDiff = Math.abs((targetDate.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (daysDiff <= 7) {
+                score += Math.max(0, 30 - (daysDiff * 4));
+            }
+
+            if (score > 20) { // Threshold
+                related.push({ session, score });
+            }
+        }
+
+        // Sort by score, return top 5
+        return related
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5)
+            .map(r => r.session);
+    }
+
+    private convertInternalToData(session: SessionDataInternal): SessionData {
+        return {
+            startTime: session.startTime.toISOString(),
+            endTime: session.endTime?.toISOString(),
+            filesTouched: Array.from(session.filesTouched.values()),
+            startIntent: session.startIntent,
+            endIntent: session.endIntent,
+            keyDecisions: session.keyDecisions.length > 0 ? session.keyDecisions : undefined,
+            diffSummary: session.diffSummary,
+            fileDiffs: session.fileDiffs,
+            driftSignals: session.driftSignals,
+            label: session.label,
+            pinned: session.pinned,
+        };
+    }
+
     private async showContextPanel(): Promise<void> {
         const session = this.getSessionForQueries();
         if (!session) {
             vscode.window.showWarningMessage('No session data available. Start and end a session first.');
             return;
         }
-        const summary = this.formatSessionSummary(session);
+        let summary = this.formatSessionSummary(session);
+
+        // Add related sessions section
+        if (session.startTime) {
+            const history = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
+            const sessionData = session.startTime instanceof Date
+                ? this.convertInternalToData(session as SessionDataInternal)
+                : session as SessionData;
+
+            const related = this.findRelatedSessions(sessionData, history);
+
+            if (related.length > 0) {
+                summary += `\n🔗 RELATED SESSIONS (${related.length})\n`;
+                summary += `─────────────────────────────────────────────────────\n`;
+                related.forEach((r, idx) => {
+                    const intent = r.startIntent || r.endIntent || 'No intent';
+                    const date = new Date(r.startTime).toLocaleDateString();
+                    const pin = r.pinned ? '📌 ' : '';
+                    const label = r.label ? ` — ${r.label}` : '';
+                    summary += `${idx + 1}. ${pin}${intent}${label} (${date})\n`;
+                });
+                summary += `\n`;
+            }
+        }
+
         const doc = await vscode.workspace.openTextDocument({
             content: summary,
             language: 'markdown',
@@ -897,8 +1128,23 @@ class VibeContextExtension {
             );
             
             if (useActive === 'Use Active Session') {
+                const quality = this.calculateContextQuality(this.activeSession);
+                const emoji = this.getQualityEmoji(quality);
+                
+                if (quality < 60) {
+                    const proceed = await vscode.window.showWarningMessage(
+                        `${emoji} Context quality is ${quality}% (low). This may lead to AI hallucinations. Proceed?`,
+                        'Proceed Anyway',
+                        'Cancel'
+                    );
+                    if (proceed !== 'Proceed Anyway') return;
+                }
+                
                 const context = this.formatContextForAI(this.activeSession);
                 await this.copyContextToClipboard(context);
+                vscode.window.showInformationMessage(
+                    `Vibe Context copied! Quality: ${emoji} ${quality}%`
+                );
                 return;
             }
             return;
@@ -912,8 +1158,23 @@ class VibeContextExtension {
             return;
         }
 
+        const quality = this.calculateContextQuality(this.endedSession);
+        const emoji = this.getQualityEmoji(quality);
+
+        if (quality < 60) {
+            const proceed = await vscode.window.showWarningMessage(
+                `${emoji} Context quality is ${quality}% (low). This may lead to AI hallucinations. Proceed?`,
+                'Proceed Anyway',
+                'Cancel'
+            );
+            if (proceed !== 'Proceed Anyway') return;
+        }
+
         const context = this.formatContextForAI(this.endedSession);
         await this.copyContextToClipboard(context);
+        vscode.window.showInformationMessage(
+            `Vibe Context copied! Quality: ${emoji} ${quality}%`
+        );
     }
 
     private async loadSessionFromHistory(): Promise<void> {
@@ -1147,8 +1408,10 @@ class VibeContextExtension {
     private updateStatusBar(): void {
         if (this.activeSession && !this.activeSession.endTime) {
             // Session is active
+            const quality = this.calculateContextQuality(this.activeSession);
+            const emoji = this.getQualityEmoji(quality);
             this.statusBarItem.command = 'vibeContext.endSession';
-            this.statusBarItem.text = '$(stop) End Session';
+            this.statusBarItem.text = `$(stop) End Session ${emoji}${quality}%`;
             this.statusBarItem.tooltip = 'End Vibe Context Session (Cmd+Shift+E)';
             this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         } else {
@@ -1161,7 +1424,85 @@ class VibeContextExtension {
     }
 
     public deactivate(): void {
+        // Save active session before deactivation
+        this.autoSaveActiveSession();
+        
+        // Clear auto-save interval
+        if (this.autoSaveInterval) {
+            clearInterval(this.autoSaveInterval);
+        }
+        
         this.disposables.forEach((d) => d.dispose());
+    }
+    
+    private startAutoSave(): void {
+        // Auto-save active session every 30 seconds
+        this.autoSaveInterval = setInterval(() => {
+            this.autoSaveActiveSession();
+        }, 30000); // 30 seconds
+    }
+    
+    private autoSaveActiveSession(): void {
+        if (!this.activeSession) return;
+        
+        try {
+            const sessionToSave = {
+                startTime: this.activeSession.startTime.toISOString(),
+                filesTouched: Array.from(this.activeSession.filesTouched.entries()).map(([path, fc]) => ({
+                    filePath: fc.filePath,
+                    lastModified: fc.lastModified,
+                    snippets: fc.snippets
+                })),
+                startIntent: this.activeSession.startIntent,
+                endIntent: this.activeSession.endIntent,
+                keyDecisions: this.activeSession.keyDecisions,
+            };
+            
+            this.context.globalState.update('vibeContext.activeSessionBackup', sessionToSave);
+        } catch (error) {
+            console.error('Vibe Context: Error auto-saving active session:', error);
+        }
+    }
+    
+    private restoreActiveSession(): void {
+        try {
+            const saved = this.context.globalState.get<any>('vibeContext.activeSessionBackup');
+            if (!saved) return;
+            
+            // Check if session is recent (within last 24 hours)
+            const savedTime = new Date(saved.startTime);
+            const hoursSince = (Date.now() - savedTime.getTime()) / (1000 * 60 * 60);
+            
+            if (hoursSince > 24) {
+                // Too old, clear it
+                this.context.globalState.update('vibeContext.activeSessionBackup', undefined);
+                return;
+            }
+            
+            // Prompt user to restore
+            vscode.window.showInformationMessage(
+                `Vibe Context: Found an active session from ${Math.round(hoursSince * 10) / 10} hours ago. Would you like to restore it?`,
+                'Restore Session',
+                'Discard'
+            ).then(choice => {
+                if (choice === 'Restore Session') {
+                    this.activeSession = {
+                        startTime: new Date(saved.startTime),
+                        filesTouched: new Map(saved.filesTouched.map((fc: any) => [fc.filePath, fc])),
+                        startIntent: saved.startIntent,
+                        endIntent: saved.endIntent,
+                        keyDecisions: saved.keyDecisions || [],
+                    };
+                    this.updateStatusBar();
+                    vscode.window.showInformationMessage('Vibe Context: Session restored. Continue working or end session when done.');
+                } else {
+                    // Clear backup
+                    this.context.globalState.update('vibeContext.activeSessionBackup', undefined);
+                }
+            });
+        } catch (error) {
+            console.error('Vibe Context: Error restoring active session:', error);
+        }
     }
 
     // -------- Query Commands (Why / Decisions / What Changed) --------
@@ -1353,7 +1694,7 @@ class VibeContextExtension {
             ignoreFocusOut: true,
         });
         if (label === undefined) return; // cancelled
-        session.label = label.trim();
+        session.label = sanitizeLabel(label);
         this.endedSession = session;
         this.context.globalState.update('vibeContext.endedSession', session);
         this.updateHistorySession(session);
@@ -1392,7 +1733,7 @@ class VibeContextExtension {
             ignoreFocusOut: true,
         });
         if (label === undefined) return; // cancelled
-        target.label = label.trim();
+        target.label = sanitizeLabel(label);
         this.updateHistorySession(target);
         // If the updated session is also the current ended session, update it
         if (this.endedSession && this.endedSession.startTime === target.startTime) {
@@ -1470,6 +1811,375 @@ class VibeContextExtension {
         } catch (err) {
             vscode.window.showErrorMessage(`Failed to export session: ${err instanceof Error ? err.message : String(err)}`);
         }
+    }
+
+    private async exportAllSessions(): Promise<void> {
+        try {
+            const history = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
+            const active = this.activeSession ? this.convertInternalToData(this.activeSession) : null;
+            const ended = this.endedSession || null;
+
+            const exportData = {
+                version: '1.0',
+                exportDate: new Date().toISOString(),
+                totalSessions: history.length,
+                sessions: history,
+                activeSession: active,
+                currentEndedSession: ended,
+            };
+
+            const uri = await vscode.window.showSaveDialog({
+                saveLabel: 'Export All Sessions',
+                filters: { JSON: ['json'] },
+                defaultUri: vscode.Uri.file(`vibe-context-all-sessions-${Date.now()}.json`),
+            });
+            if (!uri) return;
+
+            await fs.writeFile(uri.fsPath, JSON.stringify(exportData, null, 2), 'utf8');
+            vscode.window.showInformationMessage(
+                `Vibe Context: Exported ${history.length} session(s) to ${uri.fsPath}`
+            );
+        } catch (err) {
+            vscode.window.showErrorMessage(
+                `Failed to export all sessions: ${err instanceof Error ? err.message : String(err)}`
+            );
+        }
+    }
+
+    private async importSessions(): Promise<void> {
+        try {
+            const uri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                canSelectFolders: false,
+                canSelectMany: false,
+                filters: { JSON: ['json'] },
+                openLabel: 'Import Sessions',
+            });
+
+            if (!uri || uri.length === 0) return;
+
+            const fileContent = await fs.readFile(uri[0].fsPath, 'utf8');
+            const importData = JSON.parse(fileContent);
+
+            if (!importData.sessions || !Array.isArray(importData.sessions)) {
+                vscode.window.showErrorMessage('Invalid session export file format.');
+                return;
+            }
+
+            const confirm = await vscode.window.showQuickPick(
+                [
+                    `Import ${importData.sessions.length} session(s) (replace existing)`,
+                    `Import ${importData.sessions.length} session(s) (merge with existing)`,
+                    'Cancel'
+                ],
+                {
+                    placeHolder: `Found ${importData.sessions.length} session(s) to import`,
+                }
+            );
+
+            if (!confirm || confirm === 'Cancel') return;
+
+            if (confirm.includes('replace')) {
+                // Replace existing
+                await this.context.globalState.update(SESSION_HISTORY_KEY, importData.sessions);
+                vscode.window.showInformationMessage(
+                    `Vibe Context: Imported ${importData.sessions.length} session(s) (replaced existing)`
+                );
+            } else {
+                // Merge with existing
+                const existing = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
+                const merged = [...importData.sessions, ...existing]
+                    .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
+                    .slice(0, SESSION_HISTORY_LIMIT);
+                await this.context.globalState.update(SESSION_HISTORY_KEY, merged);
+                vscode.window.showInformationMessage(
+                    `Vibe Context: Imported ${importData.sessions.length} session(s) (merged with ${existing.length} existing)`
+                );
+            }
+        } catch (err) {
+            vscode.window.showErrorMessage(
+                `Failed to import sessions: ${err instanceof Error ? err.message : String(err)}`
+            );
+        }
+    }
+
+    private async showSessionAnalytics(): Promise<void> {
+        try {
+            const history = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
+            const active = this.activeSession ? 1 : 0;
+            const total = history.length + active;
+
+            if (total === 0) {
+                vscode.window.showInformationMessage('No sessions to analyze.');
+                return;
+            }
+
+            // Calculate analytics
+            const totalFiles = history.reduce((sum, s) => sum + s.filesTouched.length, 0);
+            const avgFilesPerSession = totalFiles / history.length || 0;
+            const sessionsWithIntent = history.filter(s => s.startIntent || s.endIntent).length;
+            const sessionsWithDecisions = history.filter(s => s.keyDecisions && s.keyDecisions.length > 0).length;
+            const pinnedSessions = history.filter(s => s.pinned).length;
+            const labeledSessions = history.filter(s => s.label).length;
+
+            // Calculate time span
+            const dates = history.map(s => new Date(s.startTime).getTime()).filter(t => !isNaN(t));
+            const oldest = dates.length > 0 ? new Date(Math.min(...dates)) : null;
+            const newest = dates.length > 0 ? new Date(Math.max(...dates)) : null;
+            const daysSpan = oldest && newest ? Math.ceil((newest.getTime() - oldest.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+
+            // Most common files
+            const fileCounts = new Map<string, number>();
+            history.forEach(s => {
+                s.filesTouched.forEach(f => {
+                    const path = typeof f === 'string' ? f : f.filePath;
+                    fileCounts.set(path, (fileCounts.get(path) || 0) + 1);
+                });
+            });
+            const topFiles = Array.from(fileCounts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([path, count]) => ({ path, count }));
+
+            // Build analytics report
+            let report = `# Vibe Context — Session Analytics\n\n`;
+            report += `## Overview\n`;
+            report += `- **Total Sessions**: ${total} (${history.length} ended, ${active} active)\n`;
+            report += `- **Time Span**: ${daysSpan} days\n`;
+            if (oldest && newest) {
+                report += `- **Oldest**: ${oldest.toLocaleDateString()}\n`;
+                report += `- **Newest**: ${newest.toLocaleDateString()}\n`;
+            }
+            report += `\n`;
+
+            report += `## Session Quality\n`;
+            report += `- **Sessions with Intent**: ${sessionsWithIntent} (${Math.round(sessionsWithIntent / history.length * 100) || 0}%)\n`;
+            report += `- **Sessions with Decisions**: ${sessionsWithDecisions} (${Math.round(sessionsWithDecisions / history.length * 100) || 0}%)\n`;
+            report += `- **Pinned Sessions**: ${pinnedSessions}\n`;
+            report += `- **Labeled Sessions**: ${labeledSessions}\n`;
+            report += `\n`;
+
+            report += `## File Activity\n`;
+            report += `- **Total Files Touched**: ${totalFiles}\n`;
+            report += `- **Average Files per Session**: ${Math.round(avgFilesPerSession * 10) / 10}\n`;
+            report += `\n`;
+
+            if (topFiles.length > 0) {
+                report += `## Most Active Files\n`;
+                topFiles.forEach((f, idx) => {
+                    report += `${idx + 1}. ${f.path} (${f.count} session${f.count > 1 ? 's' : ''})\n`;
+                });
+                report += `\n`;
+            }
+
+            report += `## Storage\n`;
+            const storageSize = JSON.stringify(history).length;
+            report += `- **Estimated Storage**: ${Math.round(storageSize / 1024)} KB\n`;
+            report += `- **History Limit**: ${SESSION_HISTORY_LIMIT} sessions\n`;
+            report += `- **Current Usage**: ${history.length}/${SESSION_HISTORY_LIMIT} sessions\n`;
+
+            const doc = await vscode.workspace.openTextDocument({
+                content: report,
+                language: 'markdown',
+            });
+            await vscode.window.showTextDocument(doc, { preview: false });
+        } catch (error) {
+            console.error('Vibe Context: Error showing analytics:', error);
+            vscode.window.showErrorMessage('Failed to generate analytics.');
+        }
+    }
+
+    private async cleanupOldSessions(): Promise<void> {
+        try {
+            const history = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
+            if (history.length === 0) {
+                vscode.window.showInformationMessage('No sessions to clean up.');
+                return;
+            }
+
+            const daysOptions = [
+                { label: '30 days', value: 30 },
+                { label: '60 days', value: 60 },
+                { label: '90 days', value: 90 },
+                { label: 'All except pinned', value: -1 },
+            ];
+
+            const selected = await vscode.window.showQuickPick(daysOptions, {
+                placeHolder: 'Keep sessions from the last N days',
+            });
+
+            if (!selected) return;
+
+            let cleaned: SessionData[];
+            if (selected.value === -1) {
+                // Keep only pinned
+                cleaned = history.filter(s => s.pinned);
+            } else {
+                cleaned = cleanupOldSessions(history, selected.value);
+            }
+
+            const removed = history.length - cleaned.length;
+            if (removed === 0) {
+                vscode.window.showInformationMessage('No old sessions to remove.');
+                return;
+            }
+
+            const confirm = await vscode.window.showQuickPick(
+                ['Yes, remove old sessions', 'Cancel'],
+                {
+                    placeHolder: `This will remove ${removed} session(s). Continue?`,
+                }
+            );
+
+            if (confirm === 'Yes, remove old sessions') {
+                await this.context.globalState.update(SESSION_HISTORY_KEY, cleaned);
+                vscode.window.showInformationMessage(
+                    `Vibe Context: Removed ${removed} old session(s). ${cleaned.length} session(s) remaining.`
+                );
+            }
+        } catch (error) {
+            console.error('Vibe Context: Error cleaning up sessions:', error);
+            vscode.window.showErrorMessage('Failed to clean up old sessions.');
+        }
+    }
+
+    private async searchSessions(): Promise<void> {
+        try {
+            const history = this.context.globalState.get<SessionData[]>(SESSION_HISTORY_KEY) || [];
+            if (history.length === 0) {
+                vscode.window.showWarningMessage('No session history found.');
+                return;
+            }
+
+            // Performance: Limit search to recent sessions if history is large
+            const searchHistory = history.length > 50 ? history.slice(0, 50) : history;
+
+            // Advanced search options
+            const searchType = await vscode.window.showQuickPick(
+                [
+                    { label: 'Quick Search (all fields)', value: 'all' },
+                    { label: 'Search by Intent Only', value: 'intent' },
+                    { label: 'Search by File Path Only', value: 'file' },
+                    { label: 'Search by Date Only', value: 'date' },
+                    { label: 'Search by Label Only', value: 'label' },
+                ],
+                {
+                    placeHolder: 'Select search type',
+                }
+            );
+
+            if (!searchType) return;
+
+            const query = await vscode.window.showInputBox({
+                prompt: `Search sessions by ${searchType.label.toLowerCase()}`,
+                placeHolder: searchType.value === 'date' ? 'e.g., "2024-01", "January"' : 'Enter search term',
+                ignoreFocusOut: true,
+            });
+
+            if (!query || query.trim().length === 0) return;
+
+            // Sanitize query to prevent issues
+            const sanitizedQuery = query.trim().substring(0, 200);
+
+            const lowerQuery = sanitizedQuery.toLowerCase();
+            const matches = searchHistory.filter(session => {
+                // Validate session data before processing
+                if (!validateSessionData(session)) return false;
+
+                // Advanced search: filter by type
+                if (searchType.value === 'intent') {
+                    const intent = (session.startIntent || session.endIntent || '').toLowerCase();
+                    return intent.includes(lowerQuery);
+                } else if (searchType.value === 'file') {
+                    const files = session.filesTouched.map(f =>
+                        typeof f === 'string' ? f : f.filePath
+                    ).join(' ').toLowerCase();
+                    return files.includes(lowerQuery);
+                } else if (searchType.value === 'date') {
+                    const date = new Date(session.startTime).toLocaleDateString().toLowerCase();
+                    const dateShort = new Date(session.startTime).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: '2-digit'
+                    }).toLowerCase();
+                    return date.includes(lowerQuery) || dateShort.includes(lowerQuery);
+                } else if (searchType.value === 'label') {
+                    const label = (session.label || '').toLowerCase();
+                    return label.includes(lowerQuery);
+                } else {
+                    // All fields (default)
+                    const intent = (session.startIntent || session.endIntent || '').toLowerCase();
+                    const label = (session.label || '').toLowerCase();
+                    const files = session.filesTouched.map(f =>
+                        typeof f === 'string' ? f : f.filePath
+                    ).join(' ').toLowerCase();
+                    const date = new Date(session.startTime).toLocaleDateString().toLowerCase();
+                    const dateShort = new Date(session.startTime).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: '2-digit'
+                    }).toLowerCase();
+
+                    return intent.includes(lowerQuery) ||
+                           label.includes(lowerQuery) ||
+                           files.includes(lowerQuery) ||
+                           date.includes(lowerQuery) ||
+                           dateShort.includes(lowerQuery);
+                }
+            });
+
+            if (matches.length === 0) {
+                vscode.window.showInformationMessage(`No sessions found matching "${sanitizedQuery}"`);
+                return;
+            }
+
+            // Performance: Limit results to top 20 for quick pick
+            const displayMatches = matches.slice(0, 20);
+            const hasMore = matches.length > 20;
+
+            const pickItems = displayMatches.map((session, index) => {
+            const start = new Date(session.startTime);
+            const intent = session.startIntent || session.endIntent || 'No intent';
+            const pin = session.pinned ? '📌 ' : '';
+            const label = session.label ? ` — ${session.label}` : '';
+            return {
+                label: `${pin}${intent}${label}`,
+                description: `${start.toLocaleString()}`,
+                detail: `${session.filesTouched.length} file(s)`,
+                session,
+            };
+        });
+
+            const placeHolder = hasMore 
+                ? `Found ${matches.length} session(s) matching "${sanitizedQuery}" (showing top 20)`
+                : `Found ${matches.length} session(s) matching "${sanitizedQuery}"`;
+
+            const picked = await vscode.window.showQuickPick(pickItems, {
+                placeHolder,
+                matchOnDetail: true,
+            });
+
+            if (picked && validateSessionData(picked.session)) {
+                this.endedSession = picked.session;
+                this.context.globalState.update('vibeContext.endedSession', picked.session);
+                vscode.window.showInformationMessage('Session loaded. Use queries or context panel to view details.');
+            }
+        } catch (error) {
+            console.error('Vibe Context: Error in searchSessions:', error);
+            vscode.window.showErrorMessage(`Failed to search sessions: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    private async checkContextQuality(): Promise<void> {
+        const session = this.getSessionForQueries();
+        if (!session) {
+            vscode.window.showWarningMessage('No session available.');
+            return;
+        }
+        const quality = this.calculateContextQuality(session);
+        const emoji = this.getQualityEmoji(quality);
+        const tips = this.getQualityTips(session, quality);
+
+        const message = `${emoji} Context Quality: ${quality}%\n\n${tips}`;
+        await vscode.window.showInformationMessage(message, { modal: true });
     }
 
     private maybeNotifyDrift(session: SessionData): void {
