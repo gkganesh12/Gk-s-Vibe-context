@@ -1,0 +1,27 @@
+# Code Owners for Vibe Context
+# This file defines who owns different parts of the codebase
+# PRs affecting these files will require approval from owners
+
+# Global owner - all files default to this owner
+* @gkganesh12
+
+# Critical source files
+/src/extension.ts @gkganesh12
+/src/utils/ @gkganesh12
+
+# Configuration files
+/package.json @gkganesh12
+/tsconfig.json @gkganesh12
+/.github/ @gkganesh12
+
+# Tests
+/tests/ @gkganesh12
+
+# Documentation
+*.md @gkganesh12
+/README.md @gkganesh12
+/CHANGELOG.md @gkganesh12
+
+# Build outputs (shouldn't be committed, but if they are)
+/out/ @gkganesh12
+

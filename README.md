@@ -34,6 +34,8 @@
 - **One-click context export** to clipboard
 - **Markdown formatted** for easy AI consumption
 - **Complete session summary** with all details
+- **Context quality indicator** (0-100% score)
+- **Quality warnings** for low-quality context
 
 ### ⌨️ **Easy to Use**
 - **Keyboard shortcuts** for quick access
@@ -107,17 +109,38 @@ You'll be prompted to:
 ### 📋 Viewing Session Summary
 
 **Method 1: Keyboard Shortcut**
-- Press `Cmd+Shift+X`
+- Press `Cmd+Shift+X` (Mac) or `Ctrl+Shift+X` (Windows/Linux)
 
 **Method 2: Command Palette**
 - Press `Cmd+Shift+P` → Type `Context: Explain From Memory`
 
 A beautifully formatted summary will open showing:
+- 🟢 Context Quality score (0-100%)
 - 📋 Intent (start & end)
 - 💡 Key decisions
 - ⏱️ Timeline
 - 📁 Files touched
 - 🔀 Git diff summary
+- 🔗 Related sessions (if any)
+
+### 🔍 Searching Sessions
+
+**Keyboard Shortcut**
+- Press `Cmd+Shift+F` (Mac) or `Ctrl+Shift+F` (Windows/Linux)
+
+**Command Palette**
+- Press `Cmd+Shift+P` → Type `Context: Search Sessions`
+
+Search by:
+- Intent keywords
+- File paths
+- Labels
+- Dates
+
+### 📊 Session Analytics
+
+View comprehensive statistics about your sessions:
+- Press `Cmd+Shift+P` → Type `Context: Show Session Analytics`
 
 ### 🤖 Getting Context for AI
 
@@ -133,14 +156,15 @@ Context is automatically copied to your clipboard in markdown format - ready to 
 
 ## ⌨️ Keyboard Shortcuts
 
-| Action | Mac | Windows/Linux |
-|--------|-----|---------------|
-| **Start Session** | `Cmd+Shift+V`** | `Ctrl+Shift+V` |
-| **End Session** | `Cmd+Shift+E` | `Ctrl+Shift+E` |
-| **View Summary** | `Cmd+Shift+X` | `Ctrl+Shift+X` |
-| **Copy for AI** | `Cmd+Shift+C` | `Ctrl+Shift+C` |
+| Action | Mac | Windows/Linux | Description |
+|--------|-----|---------------|-------------|
+| **Start Session** | `Cmd+Shift+V` | `Ctrl+Shift+V` | Begin tracking a coding session |
+| **End Session** | `Cmd+Shift+E` | `Ctrl+Shift+E` | End current session and save |
+| **View Summary** | `Cmd+Shift+X` | `Ctrl+Shift+X` | Show session summary |
+| **Copy for AI** | `Cmd+Shift+C` | `Ctrl+Shift+C` | Copy context to clipboard |
+| **Search Sessions** | `Cmd+Shift+F` | `Ctrl+Shift+F` | Search past sessions |
 
-> 💡 **Tip**: You can customize these shortcuts in VS Code Settings → Keyboard Shortcuts
+> 💡 **Tip**: You can customize these shortcuts in VS Code Settings → Keyboard Shortcuts (`Cmd+K Cmd+S`)
 
 ---
 
@@ -218,10 +242,11 @@ This creates a `.vsix` file you can install or distribute.
 
 ## 📚 Documentation
 
-- **[Simple Guide](SIMPLE_GUIDE.md)** - Quick start guide
-- **[How to Use](HOW_TO_USE.md)** - Detailed usage instructions
-- **[Testing Guide](TESTING_GUIDE.md)** - Development and testing
-- **[Instructions](instructions.md)** - Original specification
+- **[How to Use](HOW_TO_USE.md)** - Quick start and usage guide
+- **[Execution Flow](EXECUTION-FLOW.md)** - Complete developer workflow guide
+- **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Changelog](CHANGELOG.md)** - Version history and changes
+- **[Release Notes](RELEASE-NOTES.md)** - Latest release information
 
 ---
 
@@ -267,13 +292,21 @@ This creates a `.vsix` file you can install or distribute.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please see our [Contributing Guide](.github/CONTRIBUTING.md) for details.
 
+**Quick Start**:
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+3. Make your changes and add tests
+4. Commit following [conventional commits](https://www.conventionalcommits.org/)
+5. Push to your fork (`git push origin feature/AmazingFeature`)
+6. Open a Pull Request
+
+**Requirements**:
+- All tests must pass
+- Code must compile without errors
+- Follow existing code style
+- Update documentation if needed
 
 ---
 
