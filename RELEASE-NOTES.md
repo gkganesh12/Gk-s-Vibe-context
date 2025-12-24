@@ -120,10 +120,11 @@ Automatically discover sessions related to your current work.
 
 Complete documentation is available:
 
-- **[EXECUTION-FLOW.md](EXECUTION-FLOW.md)** - Complete workflow guide
-- **[README.md](README.md)** - Quick start and features
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history
-- **[PRODUCTION-READY-PR.md](PRODUCTION-READY-PR.md)** - Release details
+- **[README.md](README.md)** - Quick start and features overview
+- **[HOW_TO_USE.md](HOW_TO_USE.md)** - Usage guide and workflows
+- **[EXECUTION-FLOW.md](EXECUTION-FLOW.md)** - Complete developer workflow guide
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
+- **[CHANGELOG.md](CHANGELOG.md)** - Detailed version history
 
 ---
 
