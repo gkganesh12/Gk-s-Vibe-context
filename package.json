@@ -2,7 +2,7 @@
   "name": "vibe-context",
   "displayName": "Vibe Context",
   "description": "Captures session-level developer intent during coding",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "GaneshKhetawat",
   "author": {
     "name": "Ganesh Khetawat"
@@ -132,6 +132,36 @@
         "command": "vibeContext.exportSessionToFile",
         "title": "Context: Export Current Session to File",
         "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.searchSessions",
+        "title": "Context: Search Sessions",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.checkContextQuality",
+        "title": "Context: Check Context Quality",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.exportAllSessions",
+        "title": "Context: Export All Sessions",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.importSessions",
+        "title": "Context: Import Sessions",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.showSessionAnalytics",
+        "title": "Context: Show Session Analytics",
+        "category": "Vibe Context"
+      },
+      {
+        "command": "vibeContext.cleanupOldSessions",
+        "title": "Context: Cleanup Old Sessions",
+        "category": "Vibe Context"
       }
     ],
     "keybindings": [
@@ -154,6 +184,11 @@
         "command": "vibeContext.getContextForAI",
         "key": "cmd+shift+c",
         "mac": "cmd+shift+c"
+      },
+      {
+        "command": "vibeContext.searchSessions",
+        "key": "cmd+shift+f",
+        "mac": "cmd+shift+f"
       }
     ]
   },
@@ -161,7 +196,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "ts-node tests/driftUtils.test.ts && ts-node tests/history.test.ts"
+    "test": "ts-node tests/driftUtils.test.ts && ts-node tests/history.test.ts && ts-node tests/search.test.ts && ts-node tests/quality.test.ts && ts-node tests/relatedSessions.test.ts"
   },
   "devDependencies": {
     "@types/vscode": "^1.74.0",
